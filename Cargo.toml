@@ -37,6 +37,7 @@ smoltcp = { version = "0.12.0", default-features = false, features = [
   "socket-raw",
   "socket-tcp",
   "socket-udp",
+  "socket-dhcpv4"
 ] }
 heapless = "0.9.1"
 esp-println = { version = "0.15.0", features = ["esp32s3"] }
