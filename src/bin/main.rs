@@ -81,6 +81,10 @@ async fn connect_wifi(mut controller: WifiController<'static>) {
         }
     }
     println!("Connected!");
+
+    loop {
+        embassy_time::Timer::after_secs(1).await;
+    }
 }
 
 #[embassy_executor::task]
@@ -88,7 +92,6 @@ async fn blink_led(mut led: Output<'static>) {
     loop {
         println!("Toggle");
         led.toggle();
-        let delay_start: Instant = Instant::now();
-        while delay_start.elapsed() < Duration::from_millis(500) {}
+        embassy_time::Timer::after_secs(1).await;
     }
 }
