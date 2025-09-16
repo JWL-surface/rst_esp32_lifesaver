@@ -44,16 +44,29 @@ async fn main(spawner: Spawner) {
     let mut adc1_config = AdcConfig::new();
     let mut pin = adc1_config.enable_pin(
         analog_pin,
-        Attenuation::_6dB  
+        Attenuation::_11dB  
     );
     let mut adc1 = Adc::new(peripherals.ADC1, adc1_config);
-    let v_ref = 2.2;//2.2v for 6db attenuation
-    
+    let v_ref = 3.1;//3.1v for 11db attenuation
+   
+    const buf_size: usize = 10;
+    let mut buf: [f32; buf_size] = [0.0; buf_size];
+    let mut count = 0;
+
     loop {
         let adc_value: u16 = nb::block!(adc1.read_oneshot(&mut pin)).unwrap();
-        let mv = (adc_value as f32 / 4095.0) * v_ref * 1000 as f32;
-        println!("adc_value = {}, mv = {}", adc_value, mv);
-        embassy_time::Timer::after_secs(1).await;
+        let mv = (adc_value as f32 / 4095.0) * v_ref * 1000.0;
+
+        //buf[count] = mv;
+        //count += 1;
+        //if count > buf_size - 1 {
+        //    println!("{:?}", buf);
+        //    count = 0;
+        //}
+        println!("{}", mv);
+
+        //println!("adc_value = {}, mv = {}", adc_value, mv);
+        embassy_time::Timer::after_millis(5).await;
     }
 }
 
