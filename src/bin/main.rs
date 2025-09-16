@@ -21,6 +21,7 @@ use smoltcp::iface::{Config, Interface, SocketSet, SocketStorage};
 use smoltcp::wire::{DhcpOption, IpAddress};
 use smoltcp::socket::{self, dhcpv4, tcp};
 use smoltcp::time::Instant as SmolInstant;
+use heapless::{vec, Vec};
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -89,7 +90,6 @@ async fn main(spawner: Spawner) {
 
     spawner.spawn(connect_wifi(controller, stack)).unwrap();
     spawner.spawn(blink_led(led)).unwrap();
-    // let _ = spawner.spawn(net_task(iface, device, sockets));
 }
 
 #[embassy_executor::task]
@@ -127,21 +127,28 @@ async fn connect_wifi(mut controller: WifiController<'static>, mut stack: Stack<
         }
     }
 
-    static RX_BUFF: StaticCell<[u8; 1536]> = StaticCell::new();
-    static TX_BUFF: StaticCell<[u8; 1536]> = StaticCell::new();
-    let mut rx_buffer: &'static mut [u8; 1536] = RX_BUFF.init([0;1536]);
-    let mut tx_buffer: &'static mut [u8; 1536] = TX_BUFF.init([0;1536]);
+    static RX_BUFF: StaticCell<[u8; 4000]> = StaticCell::new();
+    static TX_BUFF: StaticCell<[u8; 4000]> = StaticCell::new();
+    let rx_buffer: &'static mut [u8; 4000] = RX_BUFF.init([0;4000]);
+    let tx_buffer: &'static mut [u8; 4000] = TX_BUFF.init([0;4000]);
     let mut socket = stack.get_socket(rx_buffer, tx_buffer);
 
     println!("Opening socket");
     socket.work();
     
-    let remote_addr = IpAddress::v4(172, 20, 10, 7);
+    let remote_addr = IpAddress::v4(172, 20, 10, 4);
     socket.open(remote_addr, 8080).unwrap();
+
+    let mut v: Vec<u8,4000> = Vec::new();
+
+    for n in 0..4000 {
+        let i: u8 = (n%256) as u8;
+        v.push(i).expect("error adding to v");
+    }
 
     loop {
         socket
-            .write(b"Hello from ESP32\r\n")
+            .write(&v)
             .unwrap();
         socket.flush().unwrap();
 
