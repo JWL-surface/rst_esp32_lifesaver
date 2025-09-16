@@ -15,7 +15,9 @@ use esp_hal::time::{Duration, Instant};
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::timer::systimer::SystemTimer;
 use esp_hal::delay::{Delay};
-use esp_hal::analog::adc::{Adc, AdcPin, AdcConfig, Attenuation};
+use esp_hal::analog::adc::{Adc, AdcPin, AdcConfig, Attenuation, AdcCalBasic, AdcCalScheme};
+use esp_hal::peripherals::ADC1 as ADC1Peripheral;
+use esp_hal::peripherals::GPIO2 as GPIO2Peripheral;
 use esp_wifi::wifi::{self, WifiController};
 use static_cell::StaticCell;
 
@@ -42,14 +44,16 @@ async fn main(spawner: Spawner) {
     
     let analog_pin = peripherals.GPIO2;
     let mut adc1_config = AdcConfig::new();
-    let mut pin = adc1_config.enable_pin(
+    let mut pin = adc1_config.enable_pin_with_cal::<GPIO2Peripheral, AdcCalBasic<ADC1Peripheral>>(
         analog_pin,
-        Attenuation::_11dB  
+        Attenuation::_11dB
     );
+
+    
     let mut adc1 = Adc::new(peripherals.ADC1, adc1_config);
     let v_ref = 3.1;//3.1v for 11db attenuation
-   
-    const buf_size: usize = 10;
+
+    const buf_size: usize = 5000;
     let mut buf: [f32; buf_size] = [0.0; buf_size];
     let mut count = 0;
 
@@ -57,16 +61,17 @@ async fn main(spawner: Spawner) {
         let adc_value: u16 = nb::block!(adc1.read_oneshot(&mut pin)).unwrap();
         let mv = (adc_value as f32 / 4095.0) * v_ref * 1000.0;
 
-        //buf[count] = mv;
-        //count += 1;
-        //if count > buf_size - 1 {
-        //    println!("{:?}", buf);
-        //    count = 0;
-        //}
-        println!("{}", mv);
+        buf[count] = mv;
+        count += 1;
+        if count > buf_size - 1 {
+            for sample in buf.iter() {
+                println!("{}", sample);
+            }
+            count = 0;
+        }
 
         //println!("adc_value = {}, mv = {}", adc_value, mv);
-        embassy_time::Timer::after_millis(5).await;
+        embassy_time::Timer::after_millis(1).await;
     }
 }
 
