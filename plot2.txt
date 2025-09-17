@@ -3,7 +3,7 @@ Crystal frequency: 40 MHz
 Flash size:        8MB
 Features:          WiFi, BLE, Embedded Flash
 MAC address:       24:58:7c:e3:f1:c0
-App/part. size:    98,048/8,323,072 bytes, 1.18%
+App/part. size:    99,328/8,323,072 bytes, 1.19%
 Commands:
     CTRL+R    Reset chip
     CTRL+C    Exit
@@ -11,7 +11,7 @@ Commands:
 ESP-ROM:esp32s3-20210327
 Build:Mar 27 2021
 rst:0x15 (USB_UART_CHIP_RESET),boot:0x8 (SPI_FAST_FLASH_BOOT)
-Saved PC:0x40378d0b
+Saved PC:0x40378d03
 SPIWP:0xee
 mode:DIO, clock div:2
 load:0x3fce2810,len:0x15a0
@@ -34,10 +34,11 @@ I (60) boot:  0 nvs              WiFi data        01 02 00009000 00006000
 I (67) boot:  1 phy_init         RF data          01 01 0000f000 00001000
 I (73) boot:  2 factory          factory app      00 00 00010000 007f0000
 I (80) boot: End of partition table
-I (83) esp_image: segment 0: paddr=00010020 vaddr=3c000020 size=067ech ( 26604) map
-I (97) esp_image: segment 1: paddr=00016814 vaddr=3fc89110 size=005e0h (  1504) load
-I (98) esp_image: segment 2: paddr=00016dfc vaddr=40378000 size=01110h (  4368) load
-I (107) esp_image: segment 3: paddr=00017f14 vaddr=00000000 size=08104h ( 33028) 
-I (121) esp_image: segment 4: paddr=00020020 vaddr=42010020 size=07eb8h ( 32440) map
-I (130) boot: Loaded app from partition at offset 0x10000
+I (83) esp_image: segment 0: paddr=00010020 vaddr=3c000020 size=06cf0h ( 27888) map
+I (97) esp_image: segment 1: paddr=00016d18 vaddr=3fc89110 size=005e0h (  1504) load
+I (98) esp_image: segment 2: paddr=00017300 vaddr=40378000 size=01110h (  4368) load
+I (106) esp_image: segment 3: paddr=00018418 vaddr=00000000 size=07c00h ( 31744) 
+I (120) esp_image: segment 4: paddr=00020020 vaddr=42010020 size=083b8h ( 33720) map
+I (129) boot: Loaded app from partition at offset 0x10000
 I (130) boot: Disabling RNG early entropy source...
+Starting ADC task...
