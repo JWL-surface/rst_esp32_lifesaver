@@ -13,7 +13,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embedded_io::Write;
 use esp_hal::clock::CpuClock;
-use esp_hal::gpio::{Level, Output, OutputConfig};
+use esp_hal::gpio::{Level, Output, OutputConfig, Input, InputConfig};
 use esp_println::println;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::timer::systimer::SystemTimer;
@@ -96,6 +96,10 @@ impl DoubleBuffer {
         old_buffer
     }
 
+    fn clear_current_buffer(&mut self) {
+        self.get_current_buffer().clear();
+    }
+    
     // Check if current buffer is full
     fn is_current_buffer_full(&self) -> bool {
         let current_len = match self.current_buffer {
@@ -118,6 +122,8 @@ async fn main(spawner: Spawner) {
     let mut rng = esp_hal::rng::Rng::new(peripherals.RNG);
     esp_hal_embassy::init(timer0.alarm0);
 
+
+    //hr sensor stuff
     let analog_pin = peripherals.GPIO2;
     let mut adc1_config = AdcConfig::new();
     let pin = adc1_config.enable_pin_with_cal::<GPIO2Peripheral, AdcCalBasic<ADC1Peripheral>>(
@@ -125,6 +131,8 @@ async fn main(spawner: Spawner) {
         Attenuation::_11dB
     );
     let adc1 = Adc::new(peripherals.ADC1, adc1_config);
+    let lo_min_pin =  Input::new(peripherals.GPIO3, InputConfig::default());
+    let lo_plus_pin = Input::new(peripherals.GPIO4, InputConfig::default());
 
     // LED
     let led = Output::new(peripherals.GPIO21, Level::High, OutputConfig::default());
@@ -166,7 +174,7 @@ async fn main(spawner: Spawner) {
     );
 
     spawner.spawn(connect_wifi(controller, stack)).unwrap();
-    spawner.spawn(adc_task(adc1,pin)).unwrap();
+    spawner.spawn(adc_task(adc1, pin, lo_min_pin, lo_plus_pin)).unwrap();
     spawner.spawn(blink_led(led)).unwrap();
 }
 
@@ -247,7 +255,9 @@ async fn connect_wifi(mut controller: WifiController<'static>, stack: Stack<'sta
 
 #[embassy_executor::task]
 async fn adc_task(mut adc: Adc<'static, ADC1Peripheral<'static>, Blocking>,
-                  mut pin: AdcPin<GPIO2Peripheral<'static>, ADC1Peripheral<'static>, AdcCalBasic<ADC1Peripheral<'static>>>) {
+                  mut adc_pin: AdcPin<GPIO2Peripheral<'static>, ADC1Peripheral<'static>, AdcCalBasic<ADC1Peripheral<'static>>>,
+                  lo_min_pin: Input<'static>,
+                  lo_plus_pin: Input<'static>) {
 
     println!("Starting ADC task...");
 
@@ -255,14 +265,22 @@ async fn adc_task(mut adc: Adc<'static, ADC1Peripheral<'static>, Blocking>,
     let v_ref: f32 = 3.1;//3.1v for 11db attenuation
 
     loop {
-        let adc_value: u16 = nb::block!(adc.read_oneshot(&mut pin)).unwrap();
-        let mv: u16 = ((adc_value as f32 / 4095.0) * v_ref * 1000.0) as u16;
-        let current_buffer = double_buffer.get_current_buffer();
-        let _ = current_buffer.push(mv);
-        if double_buffer.is_current_buffer_full() {
-            let full_buffer = double_buffer.swap_and_take();
-            if BUFFER_CHANNEL.try_send(full_buffer).is_err() {
-               println!("[adc task] WARNING: Buffer dropped!");
+
+        if !lo_min_pin.is_high() || !lo_plus_pin.is_high() {
+            let adc_value: u16 = nb::block!(adc.read_oneshot(&mut adc_pin)).unwrap();
+            let mv: u16 = ((adc_value as f32 / 4095.0) * v_ref * 1000.0) as u16;
+            let current_buffer = double_buffer.get_current_buffer();
+            let _ = current_buffer.push(mv);
+            if double_buffer.is_current_buffer_full() {
+                let full_buffer = double_buffer.swap_and_take();
+                if BUFFER_CHANNEL.try_send(full_buffer).is_err() {
+                   println!("[adc task] WARNING: Buffer dropped!");
+                }
+            }
+        }
+        else {
+            if double_buffer.get_current_buffer().len() > 0 {
+                double_buffer.clear_current_buffer()
             }
         }
         embassy_time::Timer::after_millis(5).await;
@@ -273,7 +291,6 @@ async fn adc_task(mut adc: Adc<'static, ADC1Peripheral<'static>, Blocking>,
 #[embassy_executor::task]
 async fn blink_led(mut led: Output<'static>) {
     loop {
-        println!("Toggle");
         led.toggle();
         embassy_time::Timer::after_secs(1).await;
     }
