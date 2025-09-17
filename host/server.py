@@ -1,6 +1,18 @@
 import socket
 import struct
 import matplotlib.pyplot as plt
+import paho.mqtt.client as mqtt
+
+# IOT hub parameters
+iot_hub_name = "ih-iothub01.azure-devices.net"
+device_id = "device01-piemulator"
+
+# DO NOT PUSH
+sas_token = ""  # full SAS token
+
+# MQTT connection parameters
+username = f"{iot_hub_name}/{device_id}/?api-version=2021-04-12"
+topic = f"devices/{device_id}/messages/events/"
 
 def recv_all(sock, length):
     """Receive exactly 'length' bytes from the socket."""
@@ -11,7 +23,6 @@ def recv_all(sock, length):
             raise EOFError("Socket closed before receiving all data")
         data += more
     return data
-
 
 def plot_data(data):
     """Plot the unpacked short integers using matplotlib."""
@@ -34,13 +45,20 @@ def start_tcp_server(host='172.20.10.4', port=8080, buffer_size=4000):
     client_socket, client_address = server_socket.accept()
     print(f"Connection from {client_address}")
 
+    client = mqtt.Client(client_id=device_id, protocol=mqtt.MQTTv311)
+    client.username_pw_set(username=username, password=sas_token)
+    client.tls_set()
+    client.connect(iot_hub_name, port=8883)
+
     while True:
         try:
             data = recv_all(client_socket, buffer_size)
             shorts = struct.unpack('<' + 'H' * (len(data) // 2), data)
-
             print(f"Received {len(shorts)} values")
-            plot_data(shorts)
+
+            payload = ','.join(map(str, shorts))
+
+            client.publish(topic, payload)
         except Exception as e:
             print(f"Error: {e}")
             client_socket.sendall(b"Error receiving data")
