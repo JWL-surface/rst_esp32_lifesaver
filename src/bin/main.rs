@@ -8,20 +8,20 @@
 
 use blocking_network_stack::Stack;
 use embassy_executor::Spawner;
-use embedded_io::{Read, Write};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::Channel;
+use embedded_io::Write;
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{Level, Output, OutputConfig};
 use esp_println::println;
-use esp_hal::time::{Duration, Instant};
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::timer::systimer::SystemTimer;
 use esp_wifi::wifi::{self, WifiController, WifiDevice};
 use static_cell::StaticCell;
 use smoltcp::iface::{Config, Interface, SocketSet, SocketStorage};
 use smoltcp::wire::{DhcpOption, IpAddress};
-use smoltcp::socket::{self, dhcpv4, tcp};
 use smoltcp::time::Instant as SmolInstant;
-use heapless::{vec, Vec};
+use heapless::Vec;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -37,6 +37,70 @@ esp_bootloader_esp_idf::esp_app_desc!();
 const SSID: &str = "Iphone";
 const PASSWORD: &str = "12345678";
 
+const ADC_READ_RATE: i32 = 200;//Hz
+const PUBLISH_PERIOD: i32 = 10;//sec
+const BUFFER_SIZE: usize = (ADC_READ_RATE * PUBLISH_PERIOD) as usize;
+
+type Buffer = Vec<u16, BUFFER_SIZE>;
+
+// Channel for passing full buffers to publisher task
+static BUFFER_CHANNEL: Channel<CriticalSectionRawMutex, Buffer, 2> = Channel::new();
+
+// Double buffer structure
+struct DoubleBuffer {
+    buffer_a: Buffer,
+    buffer_b: Buffer,
+    current_buffer: BufferSelect,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BufferSelect {
+    A,
+    B,
+}
+
+impl DoubleBuffer {
+    fn new() -> Self {
+        Self {
+            buffer_a: Vec::new(),
+            buffer_b: Vec::new(),
+            current_buffer: BufferSelect::A,
+        }
+    }
+
+    // Get mutable reference to current active buffer
+    fn get_current_buffer(&mut self) -> &mut Buffer {
+        match self.current_buffer {
+            BufferSelect::A => &mut self.buffer_a,
+            BufferSelect::B => &mut self.buffer_b,
+        }
+    }
+
+    // Swap buffers and return the now-inactive buffer
+    fn swap_and_take(&mut self) -> Buffer {
+        let old_buffer = match self.current_buffer {
+            BufferSelect::A => {
+                self.current_buffer = BufferSelect::B;
+                core::mem::replace(&mut self.buffer_a, Vec::new())
+            }
+            BufferSelect::B => {
+                self.current_buffer = BufferSelect::A;
+                core::mem::replace(&mut self.buffer_b, Vec::new())
+            }
+        };
+        old_buffer
+    }
+
+    // Check if current buffer is full
+    fn is_current_buffer_full(&self) -> bool {
+        let current_len = match self.current_buffer {
+            BufferSelect::A => self.buffer_a.len(),
+            BufferSelect::B => self.buffer_b.len(),
+        };
+        current_len >= BUFFER_SIZE
+    }
+}
+
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
     // generator version: 0.5.0
@@ -49,22 +113,21 @@ async fn main(spawner: Spawner) {
     let mut rng = esp_hal::rng::Rng::new(peripherals.RNG);
     esp_hal_embassy::init(timer0.alarm0);
 
-    let mut led = Output::new(peripherals.GPIO21, Level::High, OutputConfig::default());
+    let led = Output::new(peripherals.GPIO21, Level::High, OutputConfig::default());
 
     // wifi setup
     static WIFI_INIT_CELL: StaticCell<esp_wifi::EspWifiController> = StaticCell::new();
     let timg0 = TimerGroup::new(peripherals.TIMG0);
-    // let wifi_init = WIFI_INIT_CELL.init(esp_wifi::init(timg0.timer0, esp_hal::rng::Rng::new(peripherals.RNG)).unwrap());
 
     let wifi_init = WIFI_INIT_CELL.init(esp_wifi::init(timg0.timer0, rng.clone()).unwrap());
 
-    let (mut controller, interfaces) = esp_wifi::wifi::new(wifi_init, peripherals.WIFI).unwrap();
+    let (controller, interfaces) = esp_wifi::wifi::new(wifi_init, peripherals.WIFI).unwrap();
     let mut device = interfaces.sta;
 
     // Network setup
     let addr = smoltcp::wire::HardwareAddress::Ethernet(smoltcp::wire::EthernetAddress::from_bytes(&device.mac_address()));
-    let mut config_dev = Config::new(addr);
-    let mut iface = Interface::new(config_dev, &mut device, SmolInstant::from_millis(0));
+    let config_dev = Config::new(addr);
+    let iface = Interface::new(config_dev, &mut device, SmolInstant::from_millis(0));
     
     // i have no idea
     static SOCKETS_STORAGE: StaticCell<[SocketStorage<'static>; 3]> = StaticCell::new();
@@ -80,7 +143,7 @@ async fn main(spawner: Spawner) {
     socket_set.add(dhcp_socket);
 
     let now = || esp_hal::time::Instant::now().duration_since_epoch().as_millis();
-    let mut stack = Stack::new(
+    let stack = Stack::new(
         iface,
         device,
         socket_set,
@@ -93,7 +156,7 @@ async fn main(spawner: Spawner) {
 }
 
 #[embassy_executor::task]
-async fn connect_wifi(mut controller: WifiController<'static>, mut stack: Stack<'static, WifiDevice<'static>>) {
+async fn connect_wifi(mut controller: WifiController<'static>, stack: Stack<'static, WifiDevice<'static>>) {
     let client_config = wifi::Configuration::Client(wifi::ClientConfiguration {
         ssid: SSID.try_into().unwrap(),
         password: PASSWORD.try_into().unwrap(),
@@ -131,13 +194,9 @@ async fn connect_wifi(mut controller: WifiController<'static>, mut stack: Stack<
     static TX_BUFF: StaticCell<[u8; 4000]> = StaticCell::new();
     let rx_buffer: &'static mut [u8; 4000] = RX_BUFF.init([0;4000]);
     let tx_buffer: &'static mut [u8; 4000] = TX_BUFF.init([0;4000]);
+ 
     let mut socket = stack.get_socket(rx_buffer, tx_buffer);
-
-    println!("Opening socket");
-    socket.work();
-    
     let remote_addr = IpAddress::v4(172, 20, 10, 4);
-    socket.open(remote_addr, 8080).unwrap();
 
     let mut v: Vec<u8,4000> = Vec::new();
 
@@ -147,10 +206,27 @@ async fn connect_wifi(mut controller: WifiController<'static>, mut stack: Stack<
     }
 
     loop {
-        socket
-            .write(&v)
-            .unwrap();
-        socket.flush().unwrap();
+        if !socket.is_open() {
+            println!("Opening socket");
+            socket.work();
+            socket.open(remote_addr, 8080).expect("Failed to open socket");
+        }
+
+        match socket.write(&v) {
+            Ok(_) => {
+                if let Err(e) = socket.flush() {
+                    println!("Flush failed: {:?}", e);
+                    println!("Reconnecting...");
+                    continue;
+                }
+                println!("Sent buffer!");
+            }
+            Err(e) => {
+                println!("Write failed: {:?}", e);
+                println!("Reconnecting...");
+                continue;
+            }
+        }
 
         embassy_time::Timer::after_secs(2).await;
     }

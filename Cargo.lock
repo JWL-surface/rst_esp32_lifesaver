@@ -1366,6 +1366,7 @@ dependencies = [
  "blocking-network-stack",
  "critical-section",
  "embassy-executor",
+ "embassy-sync 0.7.2",
  "embassy-time",
  "embedded-io",
  "embedded-io-async",
