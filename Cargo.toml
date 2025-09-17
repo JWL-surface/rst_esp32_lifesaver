@@ -37,10 +37,15 @@ smoltcp = { version = "0.12.0", default-features = false, features = [
   "socket-raw",
   "socket-tcp",
   "socket-udp",
+  "socket-dhcpv4"
 ] }
 heapless = "0.9.1"
 esp-println = { version = "0.15.0", features = ["esp32s3"] }
 static_cell = "2.1.1"
+blocking-network-stack = { git = "https://github.com/bjoernQ/blocking-network-stack.git", rev = "b3ecefc222d8806edd221f266999ca339c52d34e", default-features = false, features = ["dhcpv4", "tcp"] }
+embassy-sync = "0.7.2"
+nb = "1.1.0"
+bytemuck = "1.23.2"
 
 [profile.dev]
 # Rust debug is too slow.
