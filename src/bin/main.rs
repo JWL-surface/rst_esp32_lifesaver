@@ -11,6 +11,7 @@ use blocking_network_stack::Stack;
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
+use embassy_sync::signal::Signal;
 use embedded_io::Write;
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{Level, Output, OutputConfig, Input, InputConfig};
@@ -41,6 +42,9 @@ esp_bootloader_esp_idf::esp_app_desc!();
 
 const SSID: &str = "Iphone";
 const PASSWORD: &str = "12345678";
+
+// Shared signal for sensor state
+static SENSOR_CONNECTED: Signal<CriticalSectionRawMutex, bool> = Signal::new();
 
 const ADC_READ_RATE: i32 = 200;//Hz
 const PUBLISH_PERIOD: i32 = 10;//sec
@@ -267,6 +271,7 @@ async fn adc_task(mut adc: Adc<'static, ADC1Peripheral<'static>, Blocking>,
     loop {
 
         if !lo_min_pin.is_high() || !lo_plus_pin.is_high() {
+            SENSOR_CONNECTED.signal(true);
             let adc_value: u16 = nb::block!(adc.read_oneshot(&mut adc_pin)).unwrap();
             let mv: u16 = ((adc_value as f32 / 4095.0) * v_ref * 1000.0) as u16;
             let current_buffer = double_buffer.get_current_buffer();
@@ -279,6 +284,7 @@ async fn adc_task(mut adc: Adc<'static, ADC1Peripheral<'static>, Blocking>,
             }
         }
         else {
+            SENSOR_CONNECTED.signal(false);
             if double_buffer.get_current_buffer().len() > 0 {
                 double_buffer.clear_current_buffer()
             }
@@ -290,8 +296,18 @@ async fn adc_task(mut adc: Adc<'static, ADC1Peripheral<'static>, Blocking>,
 
 #[embassy_executor::task]
 async fn blink_led(mut led: Output<'static>) {
+    let mut connected = true;
     loop {
+        // non-blocking check if signal changed
+        if let Some(new_state) = SENSOR_CONNECTED.try_take() {
+            connected = new_state;
+        }
+
         led.toggle();
-        embassy_time::Timer::after_secs(1).await;
+        if connected {
+            embassy_time::Timer::after_millis(1000).await;
+        } else {
+            embassy_time::Timer::after_millis(200).await;
+        }
     }
 }
