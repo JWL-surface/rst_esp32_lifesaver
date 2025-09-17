@@ -6,6 +6,7 @@
     holding buffers for the duration of a data transfer."
 )]
 
+use bytemuck::cast_slice;
 use blocking_network_stack::Stack;
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -16,11 +17,15 @@ use esp_hal::gpio::{Level, Output, OutputConfig};
 use esp_println::println;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::timer::systimer::SystemTimer;
+use esp_hal::Blocking;
 use esp_wifi::wifi::{self, WifiController, WifiDevice};
 use static_cell::StaticCell;
 use smoltcp::iface::{Config, Interface, SocketSet, SocketStorage};
 use smoltcp::wire::{DhcpOption, IpAddress};
 use smoltcp::time::Instant as SmolInstant;
+use esp_hal::analog::adc::{Adc, AdcPin, AdcConfig, Attenuation, AdcCalBasic};
+use esp_hal::peripherals::ADC1 as ADC1Peripheral;
+use esp_hal::peripherals::GPIO2 as GPIO2Peripheral;
 use heapless::Vec;
 
 #[panic_handler]
@@ -113,6 +118,15 @@ async fn main(spawner: Spawner) {
     let mut rng = esp_hal::rng::Rng::new(peripherals.RNG);
     esp_hal_embassy::init(timer0.alarm0);
 
+    let analog_pin = peripherals.GPIO2;
+    let mut adc1_config = AdcConfig::new();
+    let pin = adc1_config.enable_pin_with_cal::<GPIO2Peripheral, AdcCalBasic<ADC1Peripheral>>(
+        analog_pin,
+        Attenuation::_11dB
+    );
+    let adc1 = Adc::new(peripherals.ADC1, adc1_config);
+
+    // LED
     let led = Output::new(peripherals.GPIO21, Level::High, OutputConfig::default());
 
     // wifi setup
@@ -152,6 +166,7 @@ async fn main(spawner: Spawner) {
     );
 
     spawner.spawn(connect_wifi(controller, stack)).unwrap();
+    spawner.spawn(adc_task(adc1,pin)).unwrap();
     spawner.spawn(blink_led(led)).unwrap();
 }
 
@@ -198,13 +213,6 @@ async fn connect_wifi(mut controller: WifiController<'static>, stack: Stack<'sta
     let mut socket = stack.get_socket(rx_buffer, tx_buffer);
     let remote_addr = IpAddress::v4(172, 20, 10, 4);
 
-    let mut v: Vec<u8,4000> = Vec::new();
-
-    for n in 0..4000 {
-        let i: u8 = (n%256) as u8;
-        v.push(i).expect("error adding to v");
-    }
-
     loop {
         if !socket.is_open() {
             println!("Opening socket");
@@ -212,7 +220,12 @@ async fn connect_wifi(mut controller: WifiController<'static>, stack: Stack<'sta
             socket.open(remote_addr, 8080).expect("Failed to open socket");
         }
 
-        match socket.write(&v) {
+        let buffer = BUFFER_CHANNEL.receive().await;
+        let buffer_as_slice: &[u16] = buffer.as_slice();
+        let sending_buff: &[u8] = cast_slice(buffer_as_slice);
+        println!("Received buffer from ADC! Sending over TCP...");
+
+        match socket.write(sending_buff) {
             Ok(_) => {
                 if let Err(e) = socket.flush() {
                     println!("Flush failed: {:?}", e);
@@ -231,6 +244,31 @@ async fn connect_wifi(mut controller: WifiController<'static>, stack: Stack<'sta
         embassy_time::Timer::after_secs(2).await;
     }
 }
+
+#[embassy_executor::task]
+async fn adc_task(mut adc: Adc<'static, ADC1Peripheral<'static>, Blocking>,
+                  mut pin: AdcPin<GPIO2Peripheral<'static>, ADC1Peripheral<'static>, AdcCalBasic<ADC1Peripheral<'static>>>) {
+
+    println!("Starting ADC task...");
+
+    let mut double_buffer = DoubleBuffer::new();
+    let v_ref: f32 = 3.1;//3.1v for 11db attenuation
+
+    loop {
+        let adc_value: u16 = nb::block!(adc.read_oneshot(&mut pin)).unwrap();
+        let mv: u16 = ((adc_value as f32 / 4095.0) * v_ref * 1000.0) as u16;
+        let current_buffer = double_buffer.get_current_buffer();
+        let _ = current_buffer.push(mv);
+        if double_buffer.is_current_buffer_full() {
+            let full_buffer = double_buffer.swap_and_take();
+            if BUFFER_CHANNEL.try_send(full_buffer).is_err() {
+               println!("[adc task] WARNING: Buffer dropped!");
+            }
+        }
+        embassy_time::Timer::after_millis(5).await;
+    }
+}
+
 
 #[embassy_executor::task]
 async fn blink_led(mut led: Output<'static>) {
