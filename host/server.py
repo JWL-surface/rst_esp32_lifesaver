@@ -13,7 +13,7 @@ import json
 # IOT hub parameters
 iot_hub_name = "ih-iothub01.azure-devices.net"
 device_id = "device01-piemulator"
-device_key = os.getenv("IOTHUB_DEVICE_KEY")
+device_key = str(os.getenv("IOTHUB_DEVICE_KEY"))
 
 # MQTT connection parameters
 username = f"{iot_hub_name}/{device_id}/?api-version=2021-04-12"
@@ -80,8 +80,8 @@ def start_tcp_server(host='172.20.10.4', port=8080, buffer_size=4000):
     print("Connecting to mqtt client...")
     client = mqtt.Client(client_id=device_id, protocol=mqtt.MQTTv311)
     client.username_pw_set(username=username, password=sas_token)
-    client.connect(iot_hub_name, port=8883)
     client.tls_set()
+    client.connect(iot_hub_name, port=8883)
 
     while True:
         print("Waiting for client connection...")
@@ -94,8 +94,7 @@ def start_tcp_server(host='172.20.10.4', port=8080, buffer_size=4000):
 
                 shorts = struct.unpack('<' + 'H' * (len(data) // 2), data)
                 print(f"Received {len(shorts)} values")
-            
-                ecg_dict = {"ecg": shorts}
+                ecg_dict = {"ecg": list(shorts)}
                 payload = json.dumps(ecg_dict)
 
                 client.publish(topic, payload)
