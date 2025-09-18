@@ -62,7 +62,7 @@ def start_tcp_server(host='172.20.10.4', port=8080, buffer_size=4000):
 
         while True:
             try:
-                data = recv_all(client_socket, buffer_size, timeout=1)
+                data = recv_all(client_socket, buffer_size, timeout=3)
 
                 print(data)
                 shorts = struct.unpack('<' + 'H' * (len(data) // 2), data)
