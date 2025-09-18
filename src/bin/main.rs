@@ -47,8 +47,9 @@ const PASSWORD: &str = "12345678";
 // Shared signal for sensor state
 static SENSOR_CONNECTED: Signal<CriticalSectionRawMutex, bool> = Signal::new();
 
-const ADC_READ_RATE: i32 = 200;//Hz
-const PUBLISH_PERIOD: i32 = 10;//sec
+const ADC_READ_RATE: u32 = 125;//Hz
+const ADC_READ_DELAY: u64 = 1000 / ADC_READ_RATE as u64;//ms
+const PUBLISH_PERIOD: u32 = 10;//sec
 const BUFFER_SIZE: usize = (ADC_READ_RATE * PUBLISH_PERIOD) as usize;
 
 type Buffer = Vec<u16, BUFFER_SIZE>;
@@ -311,7 +312,7 @@ async fn adc_task(mut adc: Adc<'static, ADC1Peripheral<'static>, Blocking>,
                 double_buffer.clear_current_buffer()
             }
         }
-        embassy_time::Timer::after_millis(5).await;
+        embassy_time::Timer::after_millis(ADC_READ_DELAY).await;
     }
 }
 

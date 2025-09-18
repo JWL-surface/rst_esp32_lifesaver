@@ -67,7 +67,7 @@ def plot_data(data):
     plt.tight_layout()
     plt.show()
 
-def start_tcp_server(host='172.20.10.4', port=8080, buffer_size=4000):
+def start_tcp_server(host='172.20.10.4', port=8080, buffer_size=2500):
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_socket.bind((host, port))
