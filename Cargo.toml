@@ -46,6 +46,7 @@ blocking-network-stack = { git = "https://github.com/bjoernQ/blocking-network-st
 embassy-sync = "0.7.2"
 nb = "1.1.0"
 bytemuck = "1.23.2"
+embassy-futures = "0.1.2"
 
 [profile.dev]
 # Rust debug is too slow.

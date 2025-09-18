@@ -12,6 +12,7 @@ use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
+use embassy_time::{Duration, WithTimeout};
 use embedded_io::Write;
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{Level, Output, OutputConfig, Input, InputConfig};
@@ -232,28 +233,96 @@ async fn connect_wifi(mut controller: WifiController<'static>, stack: Stack<'sta
             socket.open(remote_addr, 8080).expect("Failed to open socket");
         }
 
-        let buffer = BUFFER_CHANNEL.receive().await;
-        let buffer_as_slice: &[u16] = buffer.as_slice();
-        let sending_buff: &[u8] = cast_slice(buffer_as_slice);
-        println!("Received buffer from ADC! Sending over TCP...");
+        let future = BUFFER_CHANNEL.receive().with_timeout(Duration::from_millis(0));
 
-        match socket.write(sending_buff) {
-            Ok(_) => {
-                if let Err(e) = socket.flush() {
-                    println!("Flush failed: {:?}", e);
-                    println!("Reconnecting...");
-                    continue;
+        match future.await {
+            Ok(buffer) => {
+                let buffer_as_slice: &[u16] = buffer.as_slice();
+                let sending_buff: &[u8] = cast_slice(buffer_as_slice);
+                println!("Received buffer from ADC! Sending over TCP...");
+
+                match socket.write(sending_buff) {
+                    Ok(_) => {
+                        if let Err(e) = socket.flush() {
+                            println!("Flush failed: {:?}", e);
+                            println!("Reconnecting...");
+                            continue;
+                        }
+                        println!("Sent buffer!");
+                    }
+                    Err(e) => {
+                        println!("Write failed: {:?}", e);
+                        println!("Reconnecting...");
+                        continue;
+                    }
                 }
-                println!("Sent buffer!");
             }
-            Err(e) => {
-                println!("Write failed: {:?}", e);
-                println!("Reconnecting...");
-                continue;
+            _ => {
+                match socket.write(b"PING") {
+                    Ok(_) => {
+                        if let Err(e) = socket.flush() {
+                            println!("Flush failed: {:?}", e);
+                            println!("Reconnecting...");
+                            continue;
+                        }
+                        println!("Ping!");
+                    }
+                    Err(e) => {
+                        println!("Write failed: {:?}", e);
+                        println!("Reconnecting...");
+                        continue;
+                    }
+                }
+                // break;
             }
         }
+        embassy_time::Timer::after_millis(100).await;
 
-        embassy_time::Timer::after_secs(2).await;
+        // let timer_fut = embassy_time::Timer::after_millis(100);
+
+        // match select(buffer, timer_fut).await {
+        //     Either::First(buffer) => {
+        //         // Received buffer
+        //         let buffer_as_slice: &[u16] = buffer.as_slice();
+        //         let sending_buff: &[u8] = cast_slice(buffer_as_slice);
+        //         println!("Received buffer from ADC! Sending over TCP...");
+
+        //         match socket.write(sending_buff) {
+        //             Ok(_) => {
+        //                 if let Err(e) = socket.flush() {
+        //                     println!("Flush failed: {:?}", e);
+        //                     println!("Reconnecting...");
+        //                     continue;
+        //                 }
+        //                 println!("Sent buffer!");
+        //             }
+        //             Err(e) => {
+        //                 println!("Write failed: {:?}", e);
+        //                 println!("Reconnecting...");
+        //                 continue;
+        //             }
+        //         }
+
+        //         break;
+        //     }
+        //     Either::Second(_) => {
+        //         // Timer ticked, send ping to server
+        //         match socket.write(b"PING") {
+        //             Ok(_) => {
+        //                 if let Err(e) = socket.flush() {
+        //                     println!("Flush failed: {:?}", e);
+        //                     println!("Reconnecting...");
+        //                     continue;
+        //                 }
+        //             }
+        //             Err(e) => {
+        //                 println!("Write failed: {:?}", e);
+        //                 println!("Reconnecting...");
+        //                 continue;
+        //             }
+        //         }
+        //     }
+        // }
     }
 }
 
