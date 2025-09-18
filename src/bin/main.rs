@@ -15,7 +15,7 @@ use embassy_sync::signal::Signal;
 use embassy_time::{Duration, WithTimeout};
 use embedded_io::Write;
 use esp_hal::clock::CpuClock;
-use esp_hal::gpio::{Level, Output, OutputConfig, Input, InputConfig};
+use esp_hal::gpio::{Level, Output, OutputConfig, Input, InputConfig, Pull};
 use esp_println::println;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::timer::systimer::SystemTimer;
@@ -47,8 +47,8 @@ const PASSWORD: &str = "12345678";
 // Shared signal for sensor state
 static SENSOR_CONNECTED: Signal<CriticalSectionRawMutex, bool> = Signal::new();
 
-const ADC_READ_RATE: i32 = 200;//Hz
-const PUBLISH_PERIOD: i32 = 10;//sec
+const ADC_READ_RATE: u32 = 200;//Hz
+const PUBLISH_PERIOD: u32 = 10;//sec
 const BUFFER_SIZE: usize = (ADC_READ_RATE * PUBLISH_PERIOD) as usize;
 
 type Buffer = Vec<u16, BUFFER_SIZE>;
@@ -136,8 +136,9 @@ async fn main(spawner: Spawner) {
         Attenuation::_11dB
     );
     let adc1 = Adc::new(peripherals.ADC1, adc1_config);
-    let lo_min_pin =  Input::new(peripherals.GPIO3, InputConfig::default());
-    let lo_plus_pin = Input::new(peripherals.GPIO4, InputConfig::default());
+    let lo_config = InputConfig::default().with_pull(Pull::Up);
+    let lo_min_pin =  Input::new(peripherals.GPIO3, lo_config);
+    let lo_plus_pin = Input::new(peripherals.GPIO4, lo_config);
 
     // LED
     let led = Output::new(peripherals.GPIO21, Level::High, OutputConfig::default());
