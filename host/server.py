@@ -96,7 +96,7 @@ def start_tcp_server(host='172.20.10.4', port=8080, buffer_size=4000):
                 print(f"Received {len(shorts)} values")
             
                 ecg_dict = {"ecg": shorts}
-                payload = json.dumps(ecg_dict) 
+                payload = json.dumps(ecg_dict)
 
                 client.publish(topic, payload)
             except (EOFError, ConnectionResetError, TimeoutError) as e:

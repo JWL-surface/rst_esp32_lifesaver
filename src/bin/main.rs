@@ -233,7 +233,7 @@ async fn connect_wifi(mut controller: WifiController<'static>, stack: Stack<'sta
             socket.open(remote_addr, 8080).expect("Failed to open socket");
         }
 
-        let future = BUFFER_CHANNEL.receive().with_timeout(Duration::from_millis(0));
+        let future = BUFFER_CHANNEL.receive().with_timeout(Duration::from_millis(10));
 
         match future.await {
             Ok(buffer) => {
@@ -265,7 +265,6 @@ async fn connect_wifi(mut controller: WifiController<'static>, stack: Stack<'sta
                             println!("Reconnecting...");
                             continue;
                         }
-                        println!("Ping!");
                     }
                     Err(e) => {
                         println!("Write failed: {:?}", e);
@@ -273,56 +272,9 @@ async fn connect_wifi(mut controller: WifiController<'static>, stack: Stack<'sta
                         continue;
                     }
                 }
-                // break;
             }
         }
         embassy_time::Timer::after_millis(100).await;
-
-        // let timer_fut = embassy_time::Timer::after_millis(100);
-
-        // match select(buffer, timer_fut).await {
-        //     Either::First(buffer) => {
-        //         // Received buffer
-        //         let buffer_as_slice: &[u16] = buffer.as_slice();
-        //         let sending_buff: &[u8] = cast_slice(buffer_as_slice);
-        //         println!("Received buffer from ADC! Sending over TCP...");
-
-        //         match socket.write(sending_buff) {
-        //             Ok(_) => {
-        //                 if let Err(e) = socket.flush() {
-        //                     println!("Flush failed: {:?}", e);
-        //                     println!("Reconnecting...");
-        //                     continue;
-        //                 }
-        //                 println!("Sent buffer!");
-        //             }
-        //             Err(e) => {
-        //                 println!("Write failed: {:?}", e);
-        //                 println!("Reconnecting...");
-        //                 continue;
-        //             }
-        //         }
-
-        //         break;
-        //     }
-        //     Either::Second(_) => {
-        //         // Timer ticked, send ping to server
-        //         match socket.write(b"PING") {
-        //             Ok(_) => {
-        //                 if let Err(e) = socket.flush() {
-        //                     println!("Flush failed: {:?}", e);
-        //                     println!("Reconnecting...");
-        //                     continue;
-        //                 }
-        //             }
-        //             Err(e) => {
-        //                 println!("Write failed: {:?}", e);
-        //                 println!("Reconnecting...");
-        //                 continue;
-        //             }
-        //         }
-        //     }
-        // }
     }
 }
 
@@ -353,6 +305,7 @@ async fn adc_task(mut adc: Adc<'static, ADC1Peripheral<'static>, Blocking>,
             }
         }
         else {
+            println!("Probes disconnected!");
             SENSOR_CONNECTED.signal(false);
             if double_buffer.get_current_buffer().len() > 0 {
                 double_buffer.clear_current_buffer()
