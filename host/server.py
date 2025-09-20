@@ -9,6 +9,7 @@ from time import time
 from urllib import parse
 from hmac import HMAC
 import json
+from scipy.signal import butter, filtfilt
 
 # IOT hub parameters
 iot_hub_name = "ih-iothub01.azure-devices.net"
@@ -18,6 +19,23 @@ device_key = str(os.getenv("IOTHUB_DEVICE_KEY"))
 # MQTT connection parameters
 username = f"{iot_hub_name}/{device_id}/?api-version=2021-04-12"
 topic = f"devices/{device_id}/messages/events/"
+
+plt.ion()
+fig, ax = plt.subplots(figsize=(14, 6))
+line, = ax.plot([], [], lw=2)
+
+def lowpass_filter(data, cutoff=45.0, fs=125, order=4):
+    """
+    Apply a low-pass Butterworth filter to the data.
+    - cutoff: cutoff frequency in Hz
+    - fs: sampling rate in Hz
+    - order: filter order
+    """
+    nyquist = 0.5 * fs
+    normal_cutoff = cutoff / nyquist
+    b, a = butter(order, normal_cutoff, btype='low', analog=False)
+    filtered = filtfilt(b, a, data)
+    return filtered
 
 #https://learn.microsoft.com/en-us/azure/iot-hub/authenticate-authorize-sas?tabs=python
 def generate_sas_token(uri, key, policy_name, expiry=3600):
@@ -37,7 +55,6 @@ def generate_sas_token(uri, key, policy_name, expiry=3600):
 
     return 'SharedAccessSignature ' + parse.urlencode(rawtoken)
 
-
 def recv_all(sock, length, timeout=5):
     """Receive exactly 'length' bytes from the socket with timeout."""
     sock.settimeout(timeout)
@@ -55,17 +72,15 @@ def recv_all(sock, length, timeout=5):
         sock.settimeout(None)  # Reset to blocking mode
     return data
 
-
 def plot_data(data):
     """Plot the unpacked short integers using matplotlib."""
-    plt.figure(figsize=(10, 4))
-    plt.plot(data)
-    plt.title("Received TCP Data")
-    plt.xlabel("Index")
-    plt.ylabel("Value")
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
+    """Update the plot with new data in real time."""
+    line.set_xdata(range(len(data)))
+    line.set_ydata(data)
+    ax.relim()
+    ax.autoscale_view()
+    fig.canvas.draw()
+    fig.canvas.flush_events()
 
 def start_tcp_server(host='172.20.10.4', port=8080, buffer_size=2500):
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -96,8 +111,10 @@ def start_tcp_server(host='172.20.10.4', port=8080, buffer_size=2500):
                 print(f"Received {len(shorts)} values")
                 ecg_dict = {"ecg": list(shorts)}
                 payload = json.dumps(ecg_dict)
-
                 client.publish(topic, payload)
+                filtered_shorts = lowpass_filter(shorts)
+                plot_data(filtered_shorts)
+
             except (EOFError, ConnectionResetError, TimeoutError) as e:
                 print(f"Client disconnected: {e}")
                 client_socket.close()
@@ -110,4 +127,12 @@ def start_tcp_server(host='172.20.10.4', port=8080, buffer_size=2500):
                     pass
 
 if __name__ == "__main__":
+    ax.set_title("Real-Time ECG Data")
+    ax.set_xlabel("Index")
+    ax.set_ylabel("Value")
+    ax.grid(True)
+
+    manager = plt.get_current_fig_manager()
+    manager.window.wm_geometry("+0+0")
+
     start_tcp_server()
