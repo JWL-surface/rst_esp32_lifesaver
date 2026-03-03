@@ -1,28 +1,23 @@
-import socket
-import struct
-import matplotlib.pyplot as plt
-import paho.mqtt.client as mqtt
-import os
-from base64 import b64encode, b64decode
-from hashlib import sha256
-from time import time
-from urllib import parse
-from hmac import HMAC
 import json
+import matplotlib.pyplot as plt
 from scipy.signal import butter, filtfilt
+import paho.mqtt.client as mqtt
 
-# IOT hub parameters
-iot_hub_name = "ih-iothub01.azure-devices.net"
-device_id = "device01-piemulator"
-device_key = str(os.getenv("IOTHUB_DEVICE_KEY"))
+# MQTT configuration
+MQTT_HOST = '172.20.10.4'
+MQTT_PORT = 1883
 
-# MQTT connection parameters
-username = f"{iot_hub_name}/{device_id}/?api-version=2021-04-12"
-topic = f"devices/{device_id}/messages/events/"
-
+# Global plot setup
 plt.ion()
 fig, ax = plt.subplots(figsize=(14, 6))
 line, = ax.plot([], [], lw=2)
+ax.set_title("Real-Time ECG Data")
+ax.set_xlabel("Index")
+ax.set_ylabel("Value (mV)")
+ax.grid(True)
+manager = plt.get_current_fig_manager()
+manager.window.wm_geometry("+0+0")
+
 
 def lowpass_filter(data, cutoff=45.0, fs=125, order=4):
     """
@@ -37,43 +32,8 @@ def lowpass_filter(data, cutoff=45.0, fs=125, order=4):
     filtered = filtfilt(b, a, data)
     return filtered
 
-#https://learn.microsoft.com/en-us/azure/iot-hub/authenticate-authorize-sas?tabs=python
-def generate_sas_token(uri, key, policy_name, expiry=3600):
-    ttl = time() + expiry
-    sign_key = "%s\n%d" % ((parse.quote_plus(uri)), int(ttl))
-    print(sign_key)
-    signature = b64encode(HMAC(b64decode(key), sign_key.encode('utf-8'), sha256).digest())
-
-    rawtoken = {
-        'sr' :  uri,
-        'sig': signature,
-        'se' : str(int(ttl))
-    }
-
-    if policy_name is not None:
-        rawtoken['skn'] = policy_name
-
-    return 'SharedAccessSignature ' + parse.urlencode(rawtoken)
-
-def recv_all(sock, length, timeout=5):
-    """Receive exactly 'length' bytes from the socket with timeout."""
-    sock.settimeout(timeout)
-    data = b''
-    try:
-        while len(data) < length:
-            more = sock.recv(length - len(data))
-            if not more:
-                raise EOFError("Socket closed before receiving all data")
-            more = more.replace(b'PING', b'')
-            data += more
-    except socket.timeout:
-        raise TimeoutError("Socket timed out waiting for data")
-    finally:
-        sock.settimeout(None)  # Reset to blocking mode
-    return data
 
 def plot_data(data):
-    """Plot the unpacked short integers using matplotlib."""
     """Update the plot with new data in real time."""
     line.set_xdata(range(len(data)))
     line.set_ydata(data)
@@ -82,57 +42,95 @@ def plot_data(data):
     fig.canvas.draw()
     fig.canvas.flush_events()
 
-def start_tcp_server(host='172.20.10.4', port=8080, buffer_size=2500):
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server_socket.bind((host, port))
-    server_socket.listen(5)
-    
-    print("Generating SAS token...")
-    uri = f"{iot_hub_name}/devices/{device_id}"
-    sas_token = generate_sas_token(uri, device_key, None)
 
-    print("Connecting to mqtt client...")
-    client = mqtt.Client(client_id=device_id, protocol=mqtt.MQTTv311)
-    client.username_pw_set(username=username, password=sas_token)
-    client.tls_set()
-    client.connect(iot_hub_name, port=8883)
+def process_ecg_message(data_dict):
+    """Process ECG data from MQTT message."""
+    try:
+        ecg_values = data_dict.get("ecg", [])
 
-    while True:
-        print("Waiting for client connection...")
-        client_socket, client_address = server_socket.accept()
-        print(f"Connected to {client_address}")
+        if ecg_values:
+            print(f"Received {len(ecg_values)} ECG values")
 
-        while True:
-            try:
-                data = recv_all(client_socket, buffer_size, timeout=3)
+            # Convert to float for filtering and plotting
+            ecg_data = [float(val) for val in ecg_values]
 
-                shorts = struct.unpack('<' + 'H' * (len(data) // 2), data)
-                print(f"Received {len(shorts)} values")
-                ecg_dict = {"ecg": list(shorts)}
-                payload = json.dumps(ecg_dict)
-                client.publish(topic, payload)
-                filtered_shorts = lowpass_filter(shorts)
-                plot_data(filtered_shorts)
+            # Apply low-pass filter
+            filtered_data = lowpass_filter(ecg_data)
 
-            except (EOFError, ConnectionResetError, TimeoutError) as e:
-                print(f"Client disconnected: {e}")
-                client_socket.close()
-                break
-            except Exception as e:
-                print(f"Error: {e}")
-                try:
-                    client_socket.sendall(b"Error receiving data")
-                except:
-                    pass
+            # Plot the filtered data
+            plot_data(filtered_data)
+        else:
+            print("No ECG data found in payload")
+
+    except Exception as e:
+        print(f"Error processing ECG message: {e}")
+
+
+def on_connect(client, userdata, flags, rc):
+    """Callback for when the client connects to the broker."""
+    if rc == 0:
+        print(f"Connected to MQTT broker at {MQTT_HOST}:{MQTT_PORT}")
+        # Subscribe to ECG topics
+        client.subscribe("devices/+/messages/events/#", qos=1)
+        print("Subscribed to topic: devices/+/messages/events/#")
+    else:
+        print(f"Failed to connect with code {rc}")
+
+
+def on_message(client, userdata, msg):
+    """Callback for when a message is received from the broker.
+
+    paho-mqtt handles all MQTT packet validation and decoding.
+    The message object contains properly parsed data.
+    """
+    try:
+        topic = msg.topic
+        payload = msg.payload.decode('utf-8')
+
+        print(f"Received message on topic '{topic}'")
+
+        # Try to parse as JSON
+        try:
+            payload_data = json.loads(payload)
+            process_ecg_message(payload_data)
+        except json.JSONDecodeError as e:
+            print(f"Failed to decode JSON: {e}")
+
+    except Exception as e:
+        print(f"Error handling message: {e}")
+
+
+def main():
+    """Main entry point for the MQTT ECG client."""
+    print(f"Starting MQTT Client for ECG data reception...")
+    print(f"Connecting to {MQTT_HOST}:{MQTT_PORT}")
+
+    # Create MQTT client
+    client = mqtt.Client(
+        callback_api_version=mqtt.CallbackAPIVersion.VERSION1,
+        client_id="ecg-server"
+    )
+
+    # Set callbacks
+    client.on_connect = on_connect
+    client.on_message = on_message
+
+    # Enable debug logging
+    client.enable_logger()
+
+    # Connect to broker
+    try:
+        client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
+        print("Waiting for ESP32 to send ECG data...")
+
+        # Blocking call that processes network traffic and dispatches callbacks
+        client.loop_forever()
+
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        client.disconnect()
+
 
 if __name__ == "__main__":
-    ax.set_title("Real-Time ECG Data")
-    ax.set_xlabel("Index")
-    ax.set_ylabel("Value")
-    ax.grid(True)
-
-    manager = plt.get_current_fig_manager()
-    manager.window.wm_geometry("+0+0")
-
-    start_tcp_server()
+    main()
