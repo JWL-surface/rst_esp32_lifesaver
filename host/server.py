@@ -21,10 +21,16 @@ manager = plt.get_current_fig_manager()
 manager.window.wm_geometry("+0+0")
 
 # Rolling window for plot (limit to last N samples for performance)
-# Display exactly one buffer worth of data (1250 samples at 125Hz = 10 seconds)
+# Keep 2500 samples but display 1250 at a time (shows smooth scrolling effect)
+# New data slides in from the right as the buffer fills up
+BUFFER_SIZE = 2500
 MAX_DISPLAY_SAMPLES = 1250
+SAMPLING_RATE = 125  # Hz
 plot_buffer = []
 plot_lock = threading.Lock()  # Protects plot_buffer from race conditions
+buffer_start_sample = 0  # Which sample index to start displaying from (for scrolling effect)
+last_buffer_length = 0  # Track buffer length at last update
+buffer_arrival_time = time.time()  # When the current buffer started arriving
 
 
 def lowpass_filter(data, cutoff=45.0, fs=125, order=4):
@@ -42,28 +48,62 @@ def lowpass_filter(data, cutoff=45.0, fs=125, order=4):
 
 
 def plot_data(data):
-    """Update the plot with new data in real time, using a rolling window."""
-    global plot_buffer
+    """Add new data to buffer and reset scrolling animation."""
+    global plot_buffer, buffer_arrival_time, last_buffer_length
 
-    # Safely update the plot buffer
     with plot_lock:
         # Add new data to buffer
         plot_buffer.extend(data)
 
-        # Keep only the last MAX_DISPLAY_SAMPLES
-        if len(plot_buffer) > MAX_DISPLAY_SAMPLES:
-            plot_buffer = plot_buffer[-MAX_DISPLAY_SAMPLES:]
+        # Keep only the last BUFFER_SIZE samples
+        if len(plot_buffer) > BUFFER_SIZE:
+            plot_buffer = plot_buffer[-BUFFER_SIZE:]
 
-        # Create a copy for plotting to avoid race conditions
-        plot_data_copy = plot_buffer.copy()
+        # Reset animation when new buffer arrives
+        last_buffer_length = len(plot_buffer)
+        buffer_arrival_time = time.time()
 
-    # Update plot with the snapshot of data
-    if plot_data_copy:
-        line.set_xdata(range(len(plot_data_copy)))
-        line.set_ydata(plot_data_copy)
-        ax.relim()
-        ax.autoscale_view()
-        fig.canvas.draw_idle()  # Use draw_idle for better performance
+
+def update_plot_smooth():
+    """Update plot smoothly with scrolling animation."""
+    global buffer_start_sample, buffer_arrival_time, last_buffer_length
+
+    with plot_lock:
+        if len(plot_buffer) == 0:
+            return
+
+        # If we have less than or equal to one full display, just show what we have without scrolling
+        if len(plot_buffer) <= MAX_DISPLAY_SAMPLES:
+            plot_data_copy = plot_buffer
+        else:
+            # Calculate elapsed time since buffer arrival
+            elapsed = time.time() - buffer_arrival_time
+
+            # Calculate which sample to start displaying (scroll left as time progresses)
+            # At 125Hz, we show MAX_DISPLAY_SAMPLES in (MAX_DISPLAY_SAMPLES/125) seconds
+            scroll_amount = int(elapsed * SAMPLING_RATE)
+
+            # The display window slides across the buffer
+            # We show samples starting from scroll_amount
+            display_start = scroll_amount
+            display_end = display_start + MAX_DISPLAY_SAMPLES
+
+            # Clamp to buffer bounds
+            display_start = max(0, min(display_start, len(plot_buffer) - 1))
+            display_end = min(display_end, len(plot_buffer))
+
+            if display_end > display_start:
+                plot_data_copy = plot_buffer[display_start:display_end]
+            else:
+                return
+
+        if plot_data_copy:
+            # Update plot with the visible window
+            line.set_xdata(range(len(plot_data_copy)))
+            line.set_ydata(plot_data_copy)
+            ax.relim()
+            ax.autoscale_view()
+            fig.canvas.draw_idle()
 
 
 def process_ecg_message(data_dict):
@@ -152,8 +192,10 @@ def main():
         # Keep the plot window responsive to user interactions
         print("Plot window is ready. Close the window to exit.")
         while True:
-            plt.pause(0.1)  # Allow matplotlib to process events
-            time.sleep(0.05)
+            # Update plot smoothly for real-time scrolling effect
+            update_plot_smooth()
+            plt.pause(0.01)  # 100Hz update rate for smooth animation
+            time.sleep(0.005)
 
     except KeyboardInterrupt:
         print("\nShutting down...")
