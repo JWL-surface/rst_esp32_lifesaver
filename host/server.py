@@ -2,6 +2,8 @@ import json
 import matplotlib.pyplot as plt
 from scipy.signal import butter, filtfilt
 import paho.mqtt.client as mqtt
+import time
+import threading
 
 # MQTT configuration
 MQTT_HOST = '172.20.10.4'
@@ -12,11 +14,17 @@ plt.ion()
 fig, ax = plt.subplots(figsize=(14, 6))
 line, = ax.plot([], [], lw=2)
 ax.set_title("Real-Time ECG Data")
-ax.set_xlabel("Index")
+ax.set_xlabel("Time (samples)")
 ax.set_ylabel("Value (mV)")
 ax.grid(True)
 manager = plt.get_current_fig_manager()
 manager.window.wm_geometry("+0+0")
+
+# Rolling window for plot (limit to last N samples for performance)
+# Display exactly one buffer worth of data (1250 samples at 125Hz = 10 seconds)
+MAX_DISPLAY_SAMPLES = 1250
+plot_buffer = []
+plot_lock = threading.Lock()  # Protects plot_buffer from race conditions
 
 
 def lowpass_filter(data, cutoff=45.0, fs=125, order=4):
@@ -34,13 +42,28 @@ def lowpass_filter(data, cutoff=45.0, fs=125, order=4):
 
 
 def plot_data(data):
-    """Update the plot with new data in real time."""
-    line.set_xdata(range(len(data)))
-    line.set_ydata(data)
-    ax.relim()
-    ax.autoscale_view()
-    fig.canvas.draw()
-    fig.canvas.flush_events()
+    """Update the plot with new data in real time, using a rolling window."""
+    global plot_buffer
+
+    # Safely update the plot buffer
+    with plot_lock:
+        # Add new data to buffer
+        plot_buffer.extend(data)
+
+        # Keep only the last MAX_DISPLAY_SAMPLES
+        if len(plot_buffer) > MAX_DISPLAY_SAMPLES:
+            plot_buffer = plot_buffer[-MAX_DISPLAY_SAMPLES:]
+
+        # Create a copy for plotting to avoid race conditions
+        plot_data_copy = plot_buffer.copy()
+
+    # Update plot with the snapshot of data
+    if plot_data_copy:
+        line.set_xdata(range(len(plot_data_copy)))
+        line.set_ydata(plot_data_copy)
+        ax.relim()
+        ax.autoscale_view()
+        fig.canvas.draw_idle()  # Use draw_idle for better performance
 
 
 def process_ecg_message(data_dict):
@@ -123,13 +146,23 @@ def main():
         client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
         print("Waiting for ESP32 to send ECG data...")
 
-        # Blocking call that processes network traffic and dispatches callbacks
-        client.loop_forever()
+        # Start MQTT client in background thread
+        client.loop_start()
 
+        # Keep the plot window responsive to user interactions
+        print("Plot window is ready. Close the window to exit.")
+        while True:
+            plt.pause(0.1)  # Allow matplotlib to process events
+            time.sleep(0.05)
+
+    except KeyboardInterrupt:
+        print("\nShutting down...")
     except Exception as e:
         print(f"Error: {e}")
     finally:
+        client.loop_stop()
         client.disconnect()
+        plt.close('all')
 
 
 if __name__ == "__main__":
